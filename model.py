@@ -28,8 +28,37 @@ __device__ float warp_reduce_max(float val) {
     return val;
 }
 
-# Step 3 - block_reduce_sum (not yet solved)
-# TODO: implement
+# Step 3 - block_reduce_sum
+__device__ float block_reduce_sum(float val, float* shared) {
+    // TODO: block-level sum via warp_reduce_sum + shared memory; result valid on thread 0
+    // ===== 第 1 级：每个 warp 内部求和 =====
+    val = warp_reduce_sum(val);
+
+    int lane    = threadIdx.x & 31;
+    int warp_id = threadIdx.x >> 5;
+
+    if (lane == 0) {
+        shared[warp_id] = val;
+    }
+
+    __syncthreads();
+
+    // ===== 第 2 级：只有 warp 0 来做最终归约 =====
+    if (warp_id == 0) {
+        // 修复：用向上取整，保证最后一个不满的 warp 也被算进去
+        int num_warps = (blockDim.x + 31) >> 5;
+
+        if (lane < num_warps) {
+            val = shared[lane];
+        } else {
+            val = 0.0f;
+        }
+
+        val = warp_reduce_sum(val);
+    }
+
+    return val;
+}
 
 # Step 4 - block_reduce_max (not yet solved)
 # TODO: implement
