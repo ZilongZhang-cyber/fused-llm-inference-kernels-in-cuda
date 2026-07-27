@@ -45,9 +45,7 @@ __device__ float block_reduce_sum(float val, float* shared) {
 
     // ===== 第 2 级：只有 warp 0 来做最终归约 =====
     if (warp_id == 0) {
-        // 修复：用向上取整，保证最后一个不满的 warp 也被算进去
         int num_warps = (blockDim.x + 31) >> 5;
-
         if (lane < num_warps) {
             val = shared[lane];
         } else {
