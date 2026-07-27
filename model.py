@@ -58,8 +58,45 @@ __device__ float block_reduce_sum(float val, float* shared) {
     return val;
 }
 
-# Step 4 - block_reduce_max (not yet solved)
-# TODO: implement
+# Step 4 - block_reduce_max
+__device__ float block_reduce_max(float val, float* shared) {
+    // TODO: block-wide max via warp_reduce_max + shared memory
+        // ===== 第 1 级：每个 warp 内部求最大值 =====
+    // 调用已有的 warp_reduce_max，做完后每个 warp 的 lane 0 持有该 warp 的部分最大值
+    val = warp_reduce_max(val);
+
+    int lane    = threadIdx.x & 31;   // threadIdx.x % 32
+    int warp_id = threadIdx.x >> 5;   // threadIdx.x / 32
+
+    // 只有每个 warp 的 lane 0 把部分最大值写进 shared memory
+    if (lane == 0) {
+        shared[warp_id] = val;
+    }
+
+    // ===== 块级同步：确保所有 warp 都写完 =====
+    __syncthreads();
+
+    // ===== 第 2 级：只有 warp 0 来做最终归约 =====
+    if (warp_id == 0) {
+        // 向上取整：保证最后一个不满的 warp 也被算进去
+        int num_warps = (blockDim.x + 31) >> 5;
+
+        // warp 0 的每个 lane 读一个部分最大值
+        // 超出 num_warps 的 lane 补 -INFINITY（关键！不能补 0）
+        if (lane < num_warps) {
+            val = shared[lane];
+        } else {
+            val = -INFINITY;   // max(x, -∞) = x，不影响结果
+        }
+
+        // 再调一次 warp_reduce_max，把所有部分最大值合并成最终结果
+        // 结果落在 warp 0 的 lane 0 = thread 0 上
+        val = warp_reduce_max(val);
+    }
+
+    // 此时只有 thread 0 的 val 是全 block 的最大值
+    return val;
+}
 
 # Step 5 - add_residual_kernel (not yet solved)
 # TODO: implement
