@@ -126,8 +126,17 @@ __global__ void gelu_kernel(const float* x, float* out, int n) {
     }
 }
 
-# Step 7 - silu_kernel (not yet solved)
-# TODO: implement
+# Step 7 - silu_kernel
+__global__ void silu_kernel(const float* x, float* out, int n) {
+    // TODO: apply SiLU elementwise: out[i] = x[i] / (1 + exp(-x[i]))
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i < n) {
+        float v = x[i];
+        // SiLU(x) = x / (1 + exp(-x))
+        out[i] = v / (1.0f + expf(-v));
+    }
+}
 
 # Step 8 - swiglu_kernel (not yet solved)
 # TODO: implement
