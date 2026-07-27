@@ -151,8 +151,64 @@ __global__ void swiglu_kernel(const float* gate, const float* up, float* out, in
     }
 }
 
-# Step 9 - rmsnorm_kernel (not yet solved)
-# TODO: implement
+# Step 9 - rmsnorm_kernel
+__global__ void rmsnorm_kernel(const float* x, const float* weight, float* out, int n, float eps) {
+    // TODO: Apply RMSNorm per row (one block per row)
+        // 当前 block 处理第几行
+    int row = blockIdx.x;
+    // 该行数据的起始地址
+    const float* x_row = x + row * n;
+    float* out_row = out + row * n;
+
+    // shared memory 用来做 block 级归约
+    __shared__ float shared[32];
+
+    // ===== 第 1 步：每个线程算自己负责元素的平方和 =====
+    // 用 strided loop 处理 n > blockDim.x 的情况
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        float v = x_row[i];
+        local_sum += v * v;
+    }
+
+    // ===== 第 2 步：block 内归约求平方和（复用 block_reduce_sum 模式）=====
+    // warp 内归约
+    local_sum = warp_reduce_sum(local_sum);
+
+    int lane = threadIdx.x & 31;
+    int warp_id = threadIdx.x >> 5;
+
+    // 每个 warp 的 lane 0 写部分和到 shared memory
+    if (lane == 0) {
+        shared[warp_id] = local_sum;
+    }
+
+    __syncthreads();
+
+    // 第一个 warp 做最终归约
+    int num_warps = (blockDim.x + 31) >> 5;
+    if (warp_id == 0) {
+        float val = (lane < num_warps) ? shared[lane] : 0.0f;
+        val = warp_reduce_sum(val);
+
+        // ===== 第 3 步：thread 0 算 RMS，写到 shared[0] 广播给所有线程 =====
+        if (lane == 0) {
+            float rms = sqrtf(val / (float)n + eps);
+            shared[0] = rms;
+        }
+    }
+
+    // 同步：确保所有线程都能读到 RMS
+    __syncthreads();
+
+    // 所有线程读取同一个 RMS
+    float rms = shared[0];
+
+    // ===== 第 4 步：每个线程做归一化 + 缩放 =====
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        out_row[i] = (x_row[i] / rms) * weight[i];
+    }
+}
 
 # Step 10 - layernorm_kernel (not yet solved)
 # TODO: implement
