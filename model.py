@@ -266,8 +266,53 @@ __global__ void layernorm_kernel(const float* x, const float* weight, const floa
     }
 }
 
-# Step 11 - fused_add_rmsnorm_kernel (not yet solved)
-# TODO: implement
+# Step 11 - fused_add_rmsnorm_kernel
+__global__ void fused_add_rmsnorm_kernel(
+    const float* x,
+    const float* residual,
+    const float* weight,
+    float* out,
+    float* residual_out,
+    int n,
+    float eps
+) {
+    // TODO: fuse residual addition with RMSNorm (one block per row)
+    // 当前 block 处理第几行
+    int row = blockIdx.x;
+    const float* x_row        = x + row * n;
+    const float* res_row      = residual + row * n;
+    float* out_row            = out + row * n;
+    float* res_out_row        = residual_out + row * n;
+
+    // 归约用 scratch buffer + 广播 RMS 用的变量
+    __shared__ float shared[32];
+    __shared__ float s_inv_rms;
+
+    // ===== 第 1 步：融合的核心 =====
+    // 加法 + 写 residual_out + 顺手累加平方和，一次循环全干完
+    float local_sum_sq = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        float v = x_row[i] + res_row[i];   // 残差加法
+        res_out_row[i] = v;                // 第一个输出：加法结果
+        local_sum_sq += v * v;             // 顺手累加平方和（给 RMS 用）
+    }
+
+    // ===== 第 2 步：block 级归约求平方和（复用 block_reduce_sum）=====
+    float total_sum_sq = block_reduce_sum(local_sum_sq, shared);
+
+    // ===== 第 3 步：thread 0 算 1/RMS，广播 =====
+    if (threadIdx.x == 0) {
+        s_inv_rms = rsqrtf(total_sum_sq / (float)n + eps);
+    }
+    __syncthreads();
+
+    float inv_rms = s_inv_rms;
+
+    // ===== 第 4 步：归一化 + 缩放，写第二个输出 =====
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        out_row[i] = res_out_row[i] * inv_rms * weight[i];
+    }
+}
 
 # Step 12 - softmax_row_kernel (not yet solved)
 # TODO: implement
