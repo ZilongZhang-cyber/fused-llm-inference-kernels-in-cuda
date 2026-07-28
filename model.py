@@ -424,8 +424,29 @@ __global__ void causal_softmax_kernel(const float* x, float* out, int rows, int 
     }
 }
 
-# Step 14 - embedding_lookup_kernel (not yet solved)
-# TODO: implement
+# Step 14 - embedding_lookup_kernel
+__global__ void embedding_lookup_kernel(const int* token_ids, const float* weight, float* out, int seq_len, int vocab_size, int embed_dim) {
+    // TODO: gather embedding vectors for each token id into out
+    // 全局线程索引：每个线程拷贝一个 float
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // 总共要拷贝的元素个数
+    int total = seq_len * embed_dim;
+
+    if (idx < total) {
+        int i = idx / embed_dim;    // 第几个序列位置（第几个 token）
+        int j = idx % embed_dim;    // 向量里的第几维
+
+        int id = token_ids[i];      // 查哪一行
+
+        // 防御检查：非法 id 直接写 0，避免越界读表
+        if (id >= 0 && id < vocab_size) {
+            out[i * embed_dim + j] = weight[id * embed_dim + j];
+        } else {
+            out[i * embed_dim + j] = 0.0f;
+        }
+    }
+}
 
 # Step 15 - rope_kernel (not yet solved)
 # TODO: implement
