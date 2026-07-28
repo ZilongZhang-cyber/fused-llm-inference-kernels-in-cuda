@@ -632,6 +632,47 @@ void rmsnorm_residual_block(
         x, residual, weight, out, residual_out, n, eps);
 }
 
-# Step 20 - run_transformer_ffn (not yet solved)
-# TODO: implement
+# Step 20 - run_transformer_ffn
+void run_transformer_ffn(const float* x, const float* residual,
+                         const float* norm_weight, const float* w_gate,
+                         const float* w_up, const float* w_down, float* out,
+                         int M, int hidden_dim, int intermediate_dim,
+                         float eps) {
+  // TODO: residual+RMSNorm, SwiGLU MLP, then residual add into out
+  // ===== 分配三块临时显存，都是 [M, hidden_dim] =====
+  float* residual_out = nullptr;   // 主干：x + residual，要活到最后一步
+  float* normed = nullptr;         // RMSNorm 输出，喂给 MLP
+  float* mlp_out = nullptr;        // MLP 输出
+  size_t buf_size = (size_t)M * hidden_dim * sizeof(float);
+  cudaMalloc(&residual_out, buf_size);
+  cudaMalloc(&normed, buf_size);
+  cudaMalloc(&mlp_out, buf_size);
+
+  // ===== 第 ①② 步：残差合流 + RMSNorm（融合在一个调用里）=====
+  // residual_out = x + residual
+  // normed = RMSNorm(residual_out) * norm_weight
+  rmsnorm_residual_block(x, residual, norm_weight,
+                          normed, residual_out,
+                          M, hidden_dim, eps);
+
+  // ===== 第 ③ 步：SwiGLU MLP =====
+  // mlp_out = (SiLU(normed @ W_gate^T) * (normed @ W_up^T)) @ W_down^T
+  mlp_swiglu_forward(normed, w_gate, w_up, w_down, mlp_out,
+                      M, hidden_dim, intermediate_dim);
+
+  // ===== 第 ④ 步：第二次残差相加 =====
+  // out = mlp_out + residual_out（注意：加的是 norm 之前的主干值）
+  {
+      int total = M * hidden_dim;
+      int threads = 256;
+      int blocks = (total + threads - 1) / threads;
+      add_residual_kernel<<<blocks, threads>>>(mlp_out, residual_out,
+                                                out, total);
+  }
+
+  // ===== 释放临时显存 =====
+  cudaFree(residual_out);
+  cudaFree(normed);
+  cudaFree(mlp_out);
+}
 
