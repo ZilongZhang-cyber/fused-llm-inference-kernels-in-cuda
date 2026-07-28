@@ -365,8 +365,64 @@ __global__ void softmax_row_kernel(const float* x, float* out, int rows, int col
     }
 }
 
-# Step 13 - causal_softmax_kernel (not yet solved)
-# TODO: implement
+# Step 13 - causal_softmax_kernel
+__global__ void causal_softmax_kernel(const float* x, float* out, int rows, int cols) {
+    // TODO: numerically stable causal softmax (one block per row);
+    //       mask columns c > row to 0; use block_reduce_max / block_reduce_sum
+    int row = blockIdx.x;
+    if (row >= rows) return;
+
+    const float* x_row = x + row * cols;
+    float* out_row = out + row * cols;
+
+    // 本行有效列数：c <= row，即前 row+1 列（不超过 cols）
+    int valid = (row + 1 < cols) ? (row + 1) : cols;
+
+    __shared__ float shared[32];   // 归约 scratch buffer
+    __shared__ float s_max;        // 广播行最大值
+    __shared__ float s_sum;        // 广播行总和
+
+    // ===== 第 1 步：只在有效范围 [0, valid) 内求最大值 =====
+    float local_max = -INFINITY;
+    for (int i = threadIdx.x; i < valid; i += blockDim.x) {
+        local_max = fmaxf(local_max, x_row[i]);
+    }
+
+    float row_max = block_reduce_max(local_max, shared);
+    if (threadIdx.x == 0) {
+        s_max = row_max;
+    }
+    __syncthreads();
+    float m = s_max;
+
+    // ===== 第 2 步：有效位置算 exp(x - max) 并累加；mask 位置写 0 =====
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < cols; i += blockDim.x) {
+        if (i < valid) {
+            float e = expf(x_row[i] - m);
+            out_row[i] = e;          // 暂存 exp 值
+            local_sum += e;
+        } else {
+            out_row[i] = 0.0f;       // c > row：被 mask，直接写 0
+        }
+    }
+
+    // 复用 shared buffer 前必须同步
+    __syncthreads();
+
+    // ===== 第 3 步：归约求有效位置的 exp 总和 =====
+    float row_sum = block_reduce_sum(local_sum, shared);
+    if (threadIdx.x == 0) {
+        s_sum = row_sum;
+    }
+    __syncthreads();
+    float inv_sum = 1.0f / s_sum;
+
+    // ===== 第 4 步：只对有效位置归一化（mask 位置已是 0，不动）=====
+    for (int i = threadIdx.x; i < valid; i += blockDim.x) {
+        out_row[i] *= inv_sum;
+    }
+}
 
 # Step 14 - embedding_lookup_kernel (not yet solved)
 # TODO: implement
