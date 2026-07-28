@@ -314,8 +314,56 @@ __global__ void fused_add_rmsnorm_kernel(
     }
 }
 
-# Step 12 - softmax_row_kernel (not yet solved)
-# TODO: implement
+# Step 12 - softmax_row_kernel
+__global__ void softmax_row_kernel(const float* x, float* out, int rows, int cols) {
+    // TODO: implement numerically stable row-wise softmax (one block per row)
+    int row = blockIdx.x;
+    if (row >= rows) return;
+
+    const float* x_row = x + row * cols;
+    float* out_row = out + row * cols;
+
+    __shared__ float shared[32];     // 归约 scratch buffer
+    __shared__ float s_max;          // 广播行最大值
+    __shared__ float s_sum;          // 广播行总和
+
+    // ===== 第 1 步：求这一行的最大值 =====
+    float local_max = -INFINITY;
+    for (int i = threadIdx.x; i < cols; i += blockDim.x) {
+        local_max = fmaxf(local_max, x_row[i]);
+    }
+
+    float row_max = block_reduce_max(local_max, shared);
+    if (threadIdx.x == 0) {
+        s_max = row_max;
+    }
+    __syncthreads();
+    float m = s_max;
+
+    // ===== 第 2 步：算 exp(x - max)，写出，并累加局部和 =====
+    float local_sum = 0.0f;
+    for (int i = threadIdx.x; i < cols; i += blockDim.x) {
+        float e = expf(x_row[i] - m);
+        out_row[i] = e;              // 先把 exp 值存进 out（临时存放）
+        local_sum += e;
+    }
+
+    // 复用 shared buffer 前必须同步，防止和上一次归约的数据竞争
+    __syncthreads();
+
+    // ===== 第 3 步：求这一行 exp 的总和 =====
+    float row_sum = block_reduce_sum(local_sum, shared);
+    if (threadIdx.x == 0) {
+        s_sum = row_sum;
+    }
+    __syncthreads();
+    float inv_sum = 1.0f / s_sum;
+
+    // ===== 第 4 步：每个元素除以总和，得到概率 =====
+    for (int i = threadIdx.x; i < cols; i += blockDim.x) {
+        out_row[i] *= inv_sum;
+    }
+}
 
 # Step 13 - causal_softmax_kernel (not yet solved)
 # TODO: implement
