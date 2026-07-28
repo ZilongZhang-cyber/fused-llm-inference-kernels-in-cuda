@@ -210,8 +210,61 @@ __global__ void rmsnorm_kernel(const float* x, const float* weight, float* out, 
     }
 }
 
-# Step 10 - layernorm_kernel (not yet solved)
-# TODO: implement
+# Step 10 - layernorm_kernel
+__global__ void layernorm_kernel(const float* x, const float* weight, const float* bias, float* out, int n, float eps) {
+    // TODO: per-row LayerNorm using block_reduce_sum for mean and variance
+    // 当前 block 处理第几行
+    int row = blockIdx.x;
+    const float* x_row = x + row * n;
+    float* out_row = out + row * n;
+
+    // 归约用的 scratch buffer（每个 warp 一个 float，最多 32 个 warp）
+    __shared__ float shared[32];
+    // 用来广播 mean 和 inv_std 给所有线程
+    __shared__ float s_mean;
+    __shared__ float s_inv_std;
+
+    // ===== 第 1 步：每个线程累加自己负责元素的 sum 和 sum_sq =====
+    float local_sum = 0.0f;
+    float local_sum_sq = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        float v = x_row[i];
+        local_sum += v;
+        local_sum_sq += v * v;
+    }
+
+    // ===== 第 2 步：两次 block 级归约（复用 block_reduce_sum）=====
+    // 第一次归约：求 Σx（结果在 thread 0）
+    float total_sum = block_reduce_sum(local_sum, shared);
+    if (threadIdx.x == 0) {
+        s_mean = total_sum / (float)n;
+    }
+
+    // 同步：确保 shared buffer 可以安全复用于第二次归约
+    __syncthreads();
+
+    // 第二次归约：求 Σx²（结果在 thread 0）
+    float total_sum_sq = block_reduce_sum(local_sum_sq, shared);
+
+    // ===== 第 3 步：thread 0 算方差和 1/std，广播 =====
+    if (threadIdx.x == 0) {
+        float mean = s_mean;
+        // 方差公式：var = E[x²] - (E[x])²
+        float var = total_sum_sq / (float)n - mean * mean;
+        s_inv_std = rsqrtf(var + eps);   // 1 / sqrt(var + eps)
+    }
+
+    // 同步：确保所有线程都能读到 mean 和 inv_std
+    __syncthreads();
+
+    float mean = s_mean;
+    float inv_std = s_inv_std;
+
+    // ===== 第 4 步：每个线程做归一化 + 缩放 + 偏置 =====
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        out_row[i] = (x_row[i] - mean) * inv_std * weight[i] + bias[i];
+    }
+}
 
 # Step 11 - fused_add_rmsnorm_kernel (not yet solved)
 # TODO: implement
