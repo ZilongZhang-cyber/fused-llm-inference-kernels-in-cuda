@@ -518,8 +518,40 @@ __global__ void linear_kernel(const float* x, const float* weight,
     out[m * N + n] = sum;
 }
 
-# Step 17 - fused_linear_bias_gelu_kernel (not yet solved)
-# TODO: implement
+# Step 17 - fused_linear_bias_gelu_kernel
+__global__ void fused_linear_bias_gelu_kernel(
+    const float* x, const float* weight, const float* bias,
+    float* out, int M, int N, int K) {
+    // TODO: fuse matmul, bias add, and GELU tanh approx into one kernel
+    
+    // 全局线程索引：每个线程负责一个输出元素 out[m][n]
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = M * N;
+    if (idx >= total) return;
+
+    // 一维索引拆成二维坐标
+    int m = idx / N;
+    int n = idx % N;
+
+    // ===== 第 1 步：点积（和 linear_kernel 一样）=====
+    float sum = 0.0f;
+    for (int k = 0; k < K; k++) {
+        sum += x[m * K + k] * weight[n * K + k];
+    }
+
+    // ===== 第 2 步：加 bias（本题 bias 一定非空，不用判空）=====
+    sum += bias[n];
+
+    // ===== 第 3 步：在寄存器里做 GELU tanh 近似 =====
+    // GELU(v) = 0.5 * v * (1 + tanh( sqrt(2/pi) * (v + 0.044715 * v^3) ))
+    const float sqrt_2_over_pi = 0.7978845608028654f;   // sqrt(2/pi)
+    float v = sum;
+    float inner = sqrt_2_over_pi * (v + 0.044715f * v * v * v);
+    float g = 0.5f * v * (1.0f + tanhf(inner));
+
+    // ===== 第 4 步：只写一次显存 =====
+    out[m * N + n] = g;
+}
 
 # Step 18 - mlp_swiglu_forward (not yet solved)
 # TODO: implement
