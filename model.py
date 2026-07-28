@@ -448,8 +448,46 @@ __global__ void embedding_lookup_kernel(const int* token_ids, const float* weigh
     }
 }
 
-# Step 15 - rope_kernel (not yet solved)
-# TODO: implement
+# Step 15 - rope_kernel
+__global__ void rope_kernel(float* q, float* k,
+                            const float* cos_table, const float* sin_table,
+                            int seq_len, int n_heads, int head_dim) {
+    // TODO: apply RoPE rotation in-place to every even/odd pair of q and k
+    
+    int half_dim = head_dim / 2;
+
+    // 每个线程负责一个 (位置, 头, 维度对)
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = seq_len * n_heads * half_dim;
+    if (idx >= total) return;
+
+    // 把一维索引拆成三维坐标
+    int p    = idx % half_dim;               // 第几对维度
+    int head = (idx / half_dim) % n_heads;   // 第几个头
+    int pos  = idx / (half_dim * n_heads);   // 第几个位置
+
+    // 查 cos/sin 表：[seq_len, half_dim]
+    float c = cos_table[pos * half_dim + p];
+    float s = sin_table[pos * half_dim + p];
+
+    // 定位到 q/k 里这一对的位置：[seq_len, n_heads, head_dim]
+    // 偶数位 = 2p，奇数位 = 2p+1
+    int base = pos * n_heads * head_dim + head * head_dim;
+    int even = base + 2 * p;
+    int odd  = base + 2 * p + 1;
+
+    // ===== 旋转 q =====
+    float q_even = q[even];
+    float q_odd  = q[odd];
+    q[even] = q_even * c - q_odd * s;
+    q[odd]  = q_even * s + q_odd * c;
+
+    // ===== 旋转 k（同样的旋转，独立施加）=====
+    float k_even = k[even];
+    float k_odd  = k[odd];
+    k[even] = k_even * c - k_odd * s;
+    k[odd]  = k_even * s + k_odd * c;
+}
 
 # Step 16 - linear_kernel (not yet solved)
 # TODO: implement
