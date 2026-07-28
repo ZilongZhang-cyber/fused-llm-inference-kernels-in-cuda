@@ -553,8 +553,62 @@ __global__ void fused_linear_bias_gelu_kernel(
     out[m * N + n] = g;
 }
 
-# Step 18 - mlp_swiglu_forward (not yet solved)
-# TODO: implement
+# Step 18 - mlp_swiglu_forward
+void mlp_swiglu_forward(const float* x, const float* w_gate, const float* w_up,
+                        const float* w_down, float* out,
+                        int M, int hidden_dim, int intermediate_dim) {
+    // TODO: allocate temps, run gate/up linears, swiglu, then down projection
+    // ===== 分配临时显存 =====
+    // gate_buf: [M, intermediate]，存 gate 投影结果，之后被 swiglu 原地复用
+    // up_buf:   [M, intermediate]，存 up 投影结果
+    float* gate_buf = nullptr;
+    float* up_buf = nullptr;
+    size_t buf_size = (size_t)M * intermediate_dim * sizeof(float);
+    cudaMalloc(&gate_buf, buf_size);
+    cudaMalloc(&up_buf, buf_size);
+
+    // 统一的启动配置计算
+    int threads = 256;
+
+    // ===== 第 1 步：gate 投影 =====
+    // gate_buf = x @ W_gate^T   [M, hidden] @ [hidden, intermediate] → [M, intermediate]
+    {
+        int total = M * intermediate_dim;
+        int blocks = (total + threads - 1) / threads;
+        linear_kernel<<<blocks, threads>>>(x, w_gate, nullptr, gate_buf,
+                                           M, intermediate_dim, hidden_dim);
+    }
+
+    // ===== 第 2 步：up 投影 =====
+    // up_buf = x @ W_up^T
+    {
+        int total = M * intermediate_dim;
+        int blocks = (total + threads - 1) / threads;
+        linear_kernel<<<blocks, threads>>>(x, w_up, nullptr, up_buf,
+                                           M, intermediate_dim, hidden_dim);
+    }
+
+    // ===== 第 3 步：SwiGLU 激活 =====
+    // gate_buf = SiLU(gate_buf) * up_buf   （结果原地写回 gate_buf，省一块 buffer）
+    {
+        int total = M * intermediate_dim;
+        int blocks = (total + threads - 1) / threads;
+        swiglu_kernel<<<blocks, threads>>>(gate_buf, up_buf, gate_buf, total);
+    }
+
+    // ===== 第 4 步：down 投影 =====
+    // out = gate_buf @ W_down^T   [M, intermediate] @ [intermediate, hidden] → [M, hidden]
+    {
+        int total = M * hidden_dim;
+        int blocks = (total + threads - 1) / threads;
+        linear_kernel<<<blocks, threads>>>(gate_buf, w_down, nullptr, out,
+                                           M, hidden_dim, intermediate_dim);
+    }
+
+    // ===== 释放临时显存 =====
+    cudaFree(gate_buf);
+    cudaFree(up_buf);
+}
 
 # Step 19 - rmsnorm_residual_block (not yet solved)
 # TODO: implement
