@@ -489,8 +489,34 @@ __global__ void rope_kernel(float* q, float* k,
     k[odd]  = k_even * s + k_odd * c;
 }
 
-# Step 16 - linear_kernel (not yet solved)
-# TODO: implement
+# Step 16 - linear_kernel
+__global__ void linear_kernel(const float* x, const float* weight,
+                              const float* bias, float* out,
+                              int M, int N, int K) {
+    // TODO: compute out = x @ weight^T (+ bias if non-null)
+    // x: [M*K], weight: [N*K], bias: [N] or nullptr, out: [M*N]
+    // 全局线程索引：每个线程负责一个输出元素 out[m][n]
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = M * N;
+    if (idx >= total) return;
+
+    // 一维索引拆成二维坐标
+    int m = idx / N;    // 第几行（输入的第 m 行）
+    int n = idx % N;    // 第几列（权重的第 n 行）
+
+    // 点积：x 的第 m 行 · weight 的第 n 行
+    float sum = 0.0f;
+    for (int k = 0; k < K; k++) {
+        sum += x[m * K + k] * weight[n * K + k];
+    }
+
+    // bias 非空才加（题目要求：空指针就跳过）
+    if (bias != nullptr) {
+        sum += bias[n];
+    }
+
+    out[m * N + n] = sum;
+}
 
 # Step 17 - fused_linear_bias_gelu_kernel (not yet solved)
 # TODO: implement
